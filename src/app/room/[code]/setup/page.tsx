@@ -100,6 +100,11 @@ export default function SetupPage() {
       return;
     }
 
+    if (roomData.status === "playing" || roomData.status === "finished") {
+      router.replace(`/room/${roomCode}/play`);
+      return;
+    }
+
     const { data: playerData, error: playerError } = await supabase
       .from("players")
       .select("id, name, is_host")

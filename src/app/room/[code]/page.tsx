@@ -27,6 +27,36 @@ export default function RoomPage() {
 
   const roomCode = decodeURIComponent(params.code).toUpperCase();
 
+  const routeForRoomState = useCallback(
+    (roomState: Room) => {
+      if (
+        roomState.status === "choosing-theme" &&
+        (roomState.game_mode === "questionable-answers" ||
+          roomState.game_mode === "most-likely")
+      ) {
+        router.push(`/room/${roomState.code}/themes`);
+        return true;
+      }
+
+      if (
+        roomState.status === "setup" &&
+        (roomState.game_mode === "questionable-answers" ||
+          roomState.game_mode === "most-likely")
+      ) {
+        router.push(`/room/${roomState.code}/setup`);
+        return true;
+      }
+
+      if (roomState.status === "playing" || roomState.status === "finished") {
+        router.push(`/room/${roomState.code}/play`);
+        return true;
+      }
+
+      return false;
+    },
+    [router],
+  );
+
   const [room, setRoom] = useState<Room | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
@@ -83,6 +113,11 @@ export default function RoomPage() {
 
       setRoom(roomData);
 
+      if (routeForRoomState(roomData)) {
+        setLoading(false);
+        return;
+      }
+
       try {
         await loadPlayers(roomData.id);
       } catch (caughtError) {
@@ -94,7 +129,7 @@ export default function RoomPage() {
     }
 
     void loadRoom();
-  }, [roomCode, loadPlayers]);
+  }, [roomCode, loadPlayers, routeForRoomState]);
 
   /*
    * PLAYER REALTIME
@@ -159,23 +194,10 @@ export default function RoomPage() {
           setRoom(updatedRoom);
 
           /*
-           * Once Questionable Answers is selected, every player follows
-           * the shared room through theme selection and setup.
+           * Once a supported mode is selected, every player follows
+           * the shared room through theme selection, setup, and play.
            */
-          if (
-            updatedRoom.status === "choosing-theme" &&
-            updatedRoom.game_mode === "questionable-answers"
-          ) {
-            router.push(`/room/${updatedRoom.code}/themes`);
-            return;
-          }
-
-          if (
-            updatedRoom.status === "setup" &&
-            updatedRoom.game_mode === "questionable-answers"
-          ) {
-            router.push(`/room/${updatedRoom.code}/setup`);
-          }
+          routeForRoomState(updatedRoom);
         },
       )
       .subscribe();
@@ -183,7 +205,7 @@ export default function RoomPage() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [room?.id, router]);
+  }, [room?.id, routeForRoomState]);
 
   const currentPlayer = players.find((player) => player.id === currentPlayerId);
 

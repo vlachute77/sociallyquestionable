@@ -47,18 +47,24 @@ export default function ThemesPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const loadSelections = useCallback(async (roomId: string) => {
-    const { data, error: selectionError } = await supabase
-      .from("room_qa_decks")
-      .select("deck_id")
-      .eq("room_id", roomId);
+  const loadSelections = useCallback(
+    async (roomId: string, gameMode: string | null) => {
+      const selectionTable =
+        gameMode === "most-likely" ? "room_mlt_decks" : "room_qa_decks";
 
-    if (selectionError) {
-      throw selectionError;
-    }
+      const { data, error: selectionError } = await supabase
+        .from(selectionTable)
+        .select("deck_id")
+        .eq("room_id", roomId);
 
-    setSelectedDeckIds((data ?? []).map((row) => row.deck_id));
-  }, []);
+      if (selectionError) {
+        throw selectionError;
+      }
+
+      setSelectedDeckIds((data ?? []).map((row) => row.deck_id));
+    },
+    [],
+  );
 
   const loadPage = useCallback(async () => {
     setLoading(true);
@@ -98,7 +104,10 @@ export default function ThemesPage() {
       return;
     }
 
-    if (roomData.game_mode !== "questionable-answers") {
+    if (
+      roomData.game_mode !== "questionable-answers" &&
+      roomData.game_mode !== "most-likely"
+    ) {
       router.replace(`/room/${roomCode}`);
       return;
     }
@@ -131,8 +140,11 @@ export default function ThemesPage() {
       return;
     }
 
+    const isMostLikely = roomData.game_mode === "most-likely";
+    const deckTable = isMostLikely ? "mlt_decks" : "qa_decks";
+
     const { data: deckData, error: deckError } = await supabase
-      .from("qa_decks")
+      .from(deckTable)
       .select("id, slug, name, description, seasonal, sort_order")
       .eq("active", true)
       .order("sort_order", { ascending: true });
@@ -145,6 +157,23 @@ export default function ThemesPage() {
 
     const loadedDecks = await Promise.all(
       (deckData ?? []).map(async (deck) => {
+        if (isMostLikely) {
+          const { count: promptCount, error: promptError } = await supabase
+            .from("mlt_prompt_decks")
+            .select("*", { count: "exact", head: true })
+            .eq("deck_id", deck.id);
+
+          if (promptError) {
+            throw promptError;
+          }
+
+          return {
+            ...deck,
+            promptCount: promptCount ?? 0,
+            answerCount: 1,
+          };
+        }
+
         const [
           { count: promptCount, error: promptError },
           { count: answerCount, error: answerError },
@@ -176,7 +205,38 @@ export default function ThemesPage() {
     setDecks(loadedDecks);
 
     try {
-      await loadSelections(roomData.id);
+      if (roomData.game_mode === "most-likely") {
+        const { data: existingSelections, error: existingError } =
+          await supabase
+            .from("room_mlt_decks")
+            .select("deck_id")
+            .eq("room_id", roomData.id);
+
+        if (existingError) {
+          throw existingError;
+        }
+
+        if ((existingSelections ?? []).length === 0 && playerData.is_host) {
+          const classicDeck = loadedDecks.find(
+            (deck) => deck.slug === "classic",
+          );
+
+          if (classicDeck) {
+            const { error: defaultError } = await supabase
+              .from("room_mlt_decks")
+              .insert({
+                room_id: roomData.id,
+                deck_id: classicDeck.id,
+              });
+
+            if (defaultError) {
+              throw defaultError;
+            }
+          }
+        }
+      }
+
+      await loadSelections(roomData.id, roomData.game_mode);
     } catch {
       setError("We couldn't load the selected themes.");
     }
@@ -226,6 +286,9 @@ export default function ThemesPage() {
       )
       .subscribe();
 
+    const selectionTable =
+      room.game_mode === "most-likely" ? "room_mlt_decks" : "room_qa_decks";
+
     const selectionChannel = supabase
       .channel(`room-${roomId}-themes-selection`)
       .on(
@@ -233,11 +296,11 @@ export default function ThemesPage() {
         {
           event: "*",
           schema: "public",
-          table: "room_qa_decks",
+          table: selectionTable,
           filter: `room_id=eq.${roomId}`,
         },
         () => {
-          void loadSelections(roomId);
+          void loadSelections(roomId, room.game_mode);
         },
       )
       .subscribe();
@@ -246,14 +309,17 @@ export default function ThemesPage() {
       void supabase.removeChannel(roomChannel);
       void supabase.removeChannel(selectionChannel);
     };
-  }, [loadSelections, room?.id, router]);
+  }, [loadSelections, room, router]);
 
   async function toggleDeck(deck: Deck) {
     if (!room || !currentPlayer?.is_host || saving) {
       return;
     }
 
-    const available = deck.promptCount > 0 && deck.answerCount > 0;
+    const available =
+      room.game_mode === "most-likely"
+        ? deck.promptCount > 0
+        : deck.promptCount > 0 && deck.answerCount > 0;
 
     if (!available) {
       return;
@@ -269,9 +335,12 @@ export default function ThemesPage() {
     setSaving(true);
     setError("");
 
+    const selectionTable =
+      room.game_mode === "most-likely" ? "room_mlt_decks" : "room_qa_decks";
+
     if (selected) {
       const { error: deleteError } = await supabase
-        .from("room_qa_decks")
+        .from(selectionTable)
         .delete()
         .eq("room_id", room.id)
         .eq("deck_id", deck.id);
@@ -283,7 +352,7 @@ export default function ThemesPage() {
       }
     } else {
       const { error: insertError } = await supabase
-        .from("room_qa_decks")
+        .from(selectionTable)
         .insert({
           room_id: room.id,
           deck_id: deck.id,
@@ -296,7 +365,7 @@ export default function ThemesPage() {
       }
     }
 
-    await loadSelections(room.id);
+    await loadSelections(room.id, room.game_mode);
     setSaving(false);
   }
 
@@ -429,7 +498,9 @@ export default function ThemesPage() {
 
         <div className="pt-14">
           <p className="text-sm font-bold uppercase tracking-[0.22em] text-[var(--accent)]">
-            Questionable Answers
+            {room.game_mode === "most-likely"
+              ? "Most Likely To"
+              : "Questionable Answers"}
           </p>
 
           <h1 className="mt-4 text-[clamp(2.8rem,13vw,4.5rem)] font-black leading-[0.86] tracking-[-0.07em]">
@@ -450,7 +521,10 @@ export default function ThemesPage() {
         <div className="flex-1 py-10">
           <div className="space-y-3">
             {decks.map((deck) => {
-              const available = deck.promptCount > 0 && deck.answerCount > 0;
+              const available =
+                room.game_mode === "most-likely"
+                  ? deck.promptCount > 0
+                  : deck.promptCount > 0 && deck.answerCount > 0;
               const selected = selectedDeckIds.includes(deck.id);
 
               return (

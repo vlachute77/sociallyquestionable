@@ -35,7 +35,7 @@ const gameModes = [
     description:
       "Vote for the friend most likely to fit the accusation. Then find out what everyone really thinks.",
     players: "3+ players",
-    status: "COMING SOON",
+    status: "READY",
   },
   {
     id: "hot-seat",

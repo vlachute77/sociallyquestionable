@@ -12,6 +12,7 @@ type Room = {
   game_mode: string | null;
   winning_score: number;
   content_level: string;
+  mlt_round_limit: number | null;
 };
 
 type Player = {
@@ -26,6 +27,7 @@ type SavedPlayer = {
 };
 
 const winningScores = [5, 7, 10];
+const mltRoundLimits = [10, 15, 20];
 
 const contentLevels = [
   {
@@ -85,7 +87,9 @@ export default function SetupPage() {
 
     const { data: roomData, error: roomError } = await supabase
       .from("rooms")
-      .select("id, code, status, game_mode, winning_score, content_level")
+      .select(
+        "id, code, status, game_mode, winning_score, content_level, mlt_round_limit",
+      )
       .eq("code", roomCode)
       .single();
 
@@ -95,7 +99,10 @@ export default function SetupPage() {
       return;
     }
 
-    if (roomData.game_mode !== "questionable-answers") {
+    if (
+      roomData.game_mode !== "questionable-answers" &&
+      roomData.game_mode !== "most-likely"
+    ) {
       router.replace(`/room/${roomCode}`);
       return;
     }
@@ -188,6 +195,34 @@ export default function SetupPage() {
     setSaving(false);
   }
 
+  async function updateMltRoundLimit(roundLimit: number) {
+    if (
+      !room ||
+      room.game_mode !== "most-likely" ||
+      !currentPlayer?.is_host ||
+      saving
+    ) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    const { error: updateError } = await supabase
+      .from("rooms")
+      .update({
+        mlt_round_limit: roundLimit,
+      })
+      .eq("id", room.id);
+
+    if (updateError) {
+      console.error("Failed to update round count:", updateError);
+      setError("We couldn't save that round count.");
+    }
+
+    setSaving(false);
+  }
+
   async function updateContentLevel(level: string) {
     if (!room || !currentPlayer?.is_host || saving) {
       return;
@@ -219,13 +254,23 @@ export default function SetupPage() {
     setSaving(true);
     setError("");
 
-    const { error: startError } = await supabase.rpc(
-      "start_questionable_answers_game",
-      {
-        p_room_id: room.id,
-        p_host_id: currentPlayer.id,
-      },
-    );
+    const startRpc =
+      room.game_mode === "most-likely"
+        ? "start_most_likely_to_game"
+        : "start_questionable_answers_game";
+
+    const startArgs =
+      room.game_mode === "most-likely"
+        ? {
+            p_room_id: room.id,
+            p_player_id: currentPlayer.id,
+          }
+        : {
+            p_room_id: room.id,
+            p_host_id: currentPlayer.id,
+          };
+
+    const { error: startError } = await supabase.rpc(startRpc, startArgs);
 
     if (startError) {
       console.error("Failed to start game:", startError);
@@ -303,7 +348,9 @@ export default function SetupPage() {
         {/* Intro */}
         <div className="pt-14">
           <p className="text-sm font-bold uppercase tracking-[0.22em] text-[var(--accent)]">
-            Questionable Answers
+            {room.game_mode === "most-likely"
+              ? "Most Likely To"
+              : "Questionable Answers"}
           </p>
 
           <h1 className="mt-4 text-[clamp(3rem,14vw,4.75rem)] font-black leading-[0.86] tracking-[-0.07em]">
@@ -321,39 +368,77 @@ export default function SetupPage() {
           </p>
         </div>
 
-        {/* Winning score */}
+        {/* Game length / winning score */}
         <div className="mt-10">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--muted)]">
-            First to
-          </p>
+          {room.game_mode === "most-likely" ? (
+            <>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--muted)]">
+                How long are we doing this?
+              </p>
 
-          <h2 className="mt-2 text-2xl font-black">WINNING SCORE</h2>
+              <h2 className="mt-2 text-2xl font-black">ROUNDS</h2>
 
-          <div className="mt-4 grid grid-cols-3 gap-3">
-            {winningScores.map((score) => {
-              const selected = room.winning_score === score;
+              <div className="mt-4 grid grid-cols-3 gap-3">
+                {mltRoundLimits.map((roundLimit) => {
+                  const selected = (room.mlt_round_limit ?? 10) === roundLimit;
 
-              return (
-                <button
-                  key={score}
-                  type="button"
-                  disabled={!isHost || saving}
-                  onClick={() => void updateWinningScore(score)}
-                  className={`min-h-16 rounded-[var(--radius-md)] border text-2xl font-black transition ${
-                    selected
-                      ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-foreground)]"
-                      : "border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)]"
-                  } ${
-                    isHost
-                      ? "hover:scale-[1.02] active:scale-[0.98]"
-                      : "cursor-default"
-                  }`}
-                >
-                  {score}
-                </button>
-              );
-            })}
-          </div>
+                  return (
+                    <button
+                      key={roundLimit}
+                      type="button"
+                      disabled={!isHost || saving}
+                      onClick={() => void updateMltRoundLimit(roundLimit)}
+                      className={`min-h-16 rounded-[var(--radius-md)] border text-2xl font-black transition ${
+                        selected
+                          ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-foreground)]"
+                          : "border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)]"
+                      } ${
+                        isHost
+                          ? "hover:scale-[1.02] active:scale-[0.98]"
+                          : "cursor-default"
+                      }`}
+                    >
+                      {roundLimit}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--muted)]">
+                First to
+              </p>
+
+              <h2 className="mt-2 text-2xl font-black">WINNING SCORE</h2>
+
+              <div className="mt-4 grid grid-cols-3 gap-3">
+                {winningScores.map((score) => {
+                  const selected = room.winning_score === score;
+
+                  return (
+                    <button
+                      key={score}
+                      type="button"
+                      disabled={!isHost || saving}
+                      onClick={() => void updateWinningScore(score)}
+                      className={`min-h-16 rounded-[var(--radius-md)] border text-2xl font-black transition ${
+                        selected
+                          ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-foreground)]"
+                          : "border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)]"
+                      } ${
+                        isHost
+                          ? "hover:scale-[1.02] active:scale-[0.98]"
+                          : "cursor-default"
+                      }`}
+                    >
+                      {score}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Content level */}

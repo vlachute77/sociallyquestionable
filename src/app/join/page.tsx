@@ -62,7 +62,7 @@ export default function JoinPage() {
        * BLOCK DUPLICATE CONNECTED NAMES
        *
        * Disconnected players are intentionally allowed through during an
-       * active Questionable Answers game so the rejoin RPC can restore them.
+       * active game so the mode-specific rejoin RPC can restore them.
        */
       const { data: connectedPlayers, error: connectedPlayersError } =
         await supabase
@@ -161,6 +161,63 @@ export default function JoinPage() {
          *
          * This matters because the returning player may now
          * be the host if host responsibilities were transferred.
+         */
+        const { data: player, error: playerError } = await supabase
+          .from("players")
+          .select("id, name, is_host")
+          .eq("id", playerId)
+          .eq("room_id", room.id)
+          .single();
+
+        if (playerError || !player) {
+          throw playerError ?? new Error("Could not restore player.");
+        }
+
+        localStorage.setItem(
+          "sq-player",
+          JSON.stringify({
+            playerId: player.id,
+            roomId: room.id,
+            roomCode: room.code,
+            name: player.name,
+            isHost: player.is_host,
+          }),
+        );
+
+        router.push(`/room/${room.code}/play`);
+        return;
+      }
+
+      /*
+       * ACTIVE MOST LIKELY TO GAME
+       *
+       * The RPC will either reconnect a disconnected player with this name
+       * or create a genuinely new late-joining player.
+       */
+      if (room.status === "playing" && room.game_mode === "most-likely") {
+        const { data: playerId, error: rejoinError } = await supabase.rpc(
+          "rejoin_most_likely_to_game",
+          {
+            p_room_id: room.id,
+            p_player_name: trimmedName,
+          },
+        );
+
+        if (rejoinError || !playerId) {
+          setError(
+            rejoinError?.message ||
+              "We couldn't get you back into the questionable decisions.",
+          );
+
+          setIsJoining(false);
+          return;
+        }
+
+        /*
+         * Read the player back after the RPC.
+         *
+         * This preserves the returning player's UUID, score, and current
+         * host status if host responsibilities changed while they were away.
          */
         const { data: player, error: playerError } = await supabase
           .from("players")
